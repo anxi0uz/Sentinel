@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"gihub.com/anxi0uz/sentinel/pkg/configs"
+	"github.com/anxi0uz/sentinel/pkg/configs"
 	"github.com/joho/godotenv"
 	"github.com/knadh/koanf/parsers/toml"
 	"github.com/knadh/koanf/providers/env"
@@ -22,11 +22,11 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Host            string        `koanf:"host"`
-	Port            int           `koanf:"port"`
-	ReadTimeout     string        `koanf:"readTimeout"`
-	WriteTimeout    string        `koanf:"writeTimeout"`
-	IdleTimeout     string        `koanf:"idleTimeout"`
+	Host            string `koanf:"host"`
+	Port            int    `koanf:"port"`
+	ReadTimeout     string `koanf:"readTimeout"`
+	WriteTimeout    string `koanf:"writeTimeout"`
+	IdleTimeout     string `koanf:"idleTimeout"`
 	ReadTimeoutDur  time.Duration
 	WriteTimeoutDur time.Duration
 	IdleTimeoutDur  time.Duration
@@ -39,17 +39,17 @@ func NewConfig(ctx context.Context, configPath string) (*Config, error) {
 
 	k := koanf.New(".")
 
-	if err := k.Load(env.Provider("SENTINEL_", ".", func(s string) string {
-		return strings.ReplaceAll(strings.ToLower(strings.TrimPrefix(s, "SENTINEL_")), "_", ".")
-	}), nil); err != nil {
-		return nil, fmt.Errorf("ошибка загрузки ENV: %w", err)
-	}
-
 	if err := k.Load(file.Provider(configPath), toml.Parser()); err != nil {
 		if !os.IsNotExist(err) {
 			return nil, fmt.Errorf("не удалось прочитать config.toml: %w", err)
 		}
 		slog.InfoContext(ctx, "config.toml не найден — используем только ENV")
+	}
+
+	if err := k.Load(env.Provider("SENTINEL_", ".", func(s string) string {
+		return strings.ReplaceAll(strings.ToLower(strings.TrimPrefix(s, "SENTINEL_")), "_", ".")
+	}), nil); err != nil {
+		return nil, fmt.Errorf("ошибка загрузки ENV: %w", err)
 	}
 
 	var cfg Config
@@ -121,4 +121,15 @@ func (c *Config) validate() error {
 		return fmt.Errorf("kafka.brokers обязателен")
 	}
 	return nil
+}
+
+func (c *Config) DatabaseURL() string {
+	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
+		c.Database.User,
+		c.Database.Password,
+		c.Database.Host,
+		c.Database.Port,
+		c.Database.Name,
+		c.Database.SSLMode,
+	)
 }

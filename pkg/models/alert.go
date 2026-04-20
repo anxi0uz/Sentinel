@@ -16,8 +16,8 @@ const (
 )
 
 type Alert struct {
-	ID                  uuid.UUID
-	ScoredTransactionID uuid.UUID
-	Severity            Severity
-	CreatedAt           time.Time
+	ID                  uuid.UUID `db:"id"`
+	ScoredTransactionID uuid.UUID `db:"scored_transaction_id"`
+	Severity            Severity  `db:"severity"`
+	CreatedAt           time.Time `db:"created_at"`
 }
