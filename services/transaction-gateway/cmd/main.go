@@ -11,10 +11,11 @@ import (
 	"syscall"
 	"time"
 
-	"gihub.com/anxi0uz/sentinel/pkg/kafka"
-	"gihub.com/anxi0uz/sentinel/services/transaction-gateway/internal/api"
-	"gihub.com/anxi0uz/sentinel/services/transaction-gateway/internal/config"
-	"gihub.com/anxi0uz/sentinel/services/transaction-gateway/internal/service"
+	"github.com/anxi0uz/sentinel/pkg/database"
+	"github.com/anxi0uz/sentinel/pkg/kafka"
+	"github.com/anxi0uz/sentinel/services/transaction-gateway/internal/api"
+	"github.com/anxi0uz/sentinel/services/transaction-gateway/internal/config"
+	"github.com/anxi0uz/sentinel/services/transaction-gateway/internal/service"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/golang-cz/devslog"
@@ -58,8 +59,14 @@ func main() {
 		}
 	}()
 
+	pool, err := database.NewConnectionPool(ctx, cfg.DatabaseURL())
+	if err != nil {
+		slog.ErrorContext(ctx, "error while creating postgres pool", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+
 	producer := service.NewProducer(writer)
-	server := api.NewServer(producer)
+	server := api.NewServer(producer, pool)
 
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)

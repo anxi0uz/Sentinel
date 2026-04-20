@@ -2,21 +2,26 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
 
-	"gihub.com/anxi0uz/sentinel/pkg/models"
-	"gihub.com/anxi0uz/sentinel/services/transaction-gateway/internal/service"
+	"github.com/anxi0uz/sentinel/pkg/models"
+	"github.com/anxi0uz/sentinel/pkg/storage"
+	"github.com/anxi0uz/sentinel/services/transaction-gateway/internal/service"
 	"github.com/google/uuid"
+	"github.com/huandu/go-sqlbuilder"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Server struct {
 	producer *service.Producer
+	db       *pgxpool.Pool
 }
 
-func NewServer(producer *service.Producer) *Server {
-	return &Server{producer: producer}
+func NewServer(producer *service.Producer, db *pgxpool.Pool) *Server {
+	return &Server{producer: producer, db: db}
 }
 
 func (s *Server) SubmitTransaction(w http.ResponseWriter, r *http.Request) {
@@ -26,6 +31,20 @@ func (s *Server) SubmitTransaction(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		slog.ErrorContext(ctx, "Error while decoding body", slog.String("error", err.Error()))
 		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid request body"})
+		return
+	}
+
+	user, err := storage.GetOne[models.User](ctx, s.db, "users", func(sb *sqlbuilder.SelectBuilder) {
+		sb.Where(sb.EQ("id", req.UserId))
+	})
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			slog.ErrorContext(ctx, "no user with that transaction was found")
+			writeJSON(w, http.StatusNotFound, ErrorResponse{Error: "user not found"})
+			return
+		}
+		slog.ErrorContext(ctx, "Error while getting user", slog.String("error", err.Error()))
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "Internal server error"})
 		return
 	}
 
@@ -39,7 +58,12 @@ func (s *Server) SubmitTransaction(w http.ResponseWriter, r *http.Request) {
 		Timestamp: time.Now(),
 	}
 
-	if err := s.producer.Publish(ctx, tx); err != nil {
+	enrtx := models.EnrichedTransaction{
+		User:        *user,
+		Transaction: tx,
+	}
+
+	if err := s.producer.Publish(ctx, enrtx); err != nil {
 		slog.ErrorContext(ctx, "error while publishing transaction", slog.String("error", err.Error()))
 		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "Internal server error"})
 		return
