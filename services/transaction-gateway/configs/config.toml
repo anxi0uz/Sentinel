@@ -7,3 +7,11 @@ idleTimeout = "60s"
 
 [kafka]
 brokers = ["localhost:9092"]
+
+[database]
+host = "localhost"
+port = 5432
+user = "postgres"
+password = ""
+name = "sentinel"
+sslmode = "disable"

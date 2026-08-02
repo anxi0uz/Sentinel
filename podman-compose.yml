@@ -1,14 +1,16 @@
-networks:
-  default:
-    name: SentinelNetwork
-    external: true
+x-app-environment: &app-environment
+  SENTINEL_KAFKA_BROKERS: kafka:29092
+  SENTINEL_DATABASE_HOST: postgres
+  SENTINEL_DATABASE_PORT: 5432
+  SENTINEL_DATABASE_USER: ${SENTINEL_DATABASE_USER}
+  SENTINEL_DATABASE_PASSWORD: ${SENTINEL_DATABASE_PASSWORD}
+  SENTINEL_DATABASE_NAME: ${SENTINEL_DATABASE_NAME}
+  SENTINEL_DATABASE_SSLMODE: disable
 
 services:
   zookeeper:
-    image: docker.io/confluentinc/cp-zookeeper:latest
+    image: docker.io/confluentinc/cp-zookeeper:7.7.1
     container_name: sentinel-zookeeper
-    networks:
-      - default
     ports:
       - "2181:2181"
     environment:
@@ -20,10 +22,8 @@ services:
       retries: 5
 
   kafka:
-    image: docker.io/confluentinc/cp-kafka:latest
+    image: docker.io/confluentinc/cp-kafka:7.7.1
     container_name: sentinel-kafka
-    networks:
-      - default
     depends_on:
       zookeeper:
         condition: service_healthy
@@ -44,10 +44,8 @@ services:
       retries: 5
 
   postgres:
-    image: docker.io/library/postgres:latest
+    image: docker.io/library/postgres:17-alpine
     container_name: sentinel-postgres
-    networks:
-      - default
     restart: always
     env_file:
       - .env
@@ -65,5 +63,55 @@ services:
       timeout: 5s
       retries: 5
 
+  transaction-gateway:
+    build:
+      context: .
+      dockerfile: services/transaction-gateway/Dockerfile
+    container_name: sentinel-transaction-gateway
+    restart: on-failure
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment: *app-environment
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health >/dev/null"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  scoring-engine:
+    build:
+      context: .
+      dockerfile: services/scoring-engine/Dockerfile
+    container_name: sentinel-scoring-engine
+    restart: on-failure
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment: *app-environment
+
+  alert-service:
+    build:
+      context: .
+      dockerfile: services/alert-service/Dockerfile
+    container_name: sentinel-alert-service
+    restart: on-failure
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment: *app-environment
+
 volumes:
   postgres_data:
+
+networks:
+  default:
+    name: sentinel-network

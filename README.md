@@ -1,253 +1,130 @@
 # Sentinel
 
-Real-time fraud detection system built with Go. Event-driven architecture using Apache Kafka as the message bus, PostgreSQL for persistence, and LLM-powered analytics for pattern insights.
+Sentinel is a small real-time fraud detection pipeline written in Go. It accepts
+transactions over HTTP, evaluates database-backed fraud rules and persists
+alerts using an event-driven architecture.
 
 ## Architecture
 
-```
-┌─────────────────┐     ┌──────────────────┐     ┌───────────────┐
-│ transaction-    │────▶│  scoring-engine  │────▶│ alert-service │
-│ gateway         │     │  (worker pool)   │     │               │
-└─────────────────┘     └──────────────────┘     └───────┬───────┘
-        │                        │                        │
-        │ enriches with user      │ rule-based scoring     │ persists
-        ▼                        ▼                        ▼
-   PostgreSQL              fraud_rules DB           fraud_events DB
-                           (RuleCache)                     │
-                                                           ▼
-                                                  ┌─────────────────┐
-                                                  │ notification-   │
-                                                  │ service         │
-                                                  └─────────────────┘
-
-┌─────────────────┐     ┌──────────────────┐
-│  analytics-api  │     │ insight-service  │
-│  (HTTP API)     │     │ (LLM scheduler)  │
-└─────────────────┘     └──────────────────┘
+```text
+POST /transactions
+        │
+        ▼
+transaction-gateway ── Kafka: transactions ──▶ scoring-engine
+                                                    │
+                                                    ▼
+                                             Kafka: scored
+                                                    │
+                                                    ▼
+                                              alert-service
+                                                    │
+                                      PostgreSQL + transactional outbox
+                                                    │
+                                                    ▼
+                                              Kafka: alerts
 ```
 
-**Pipeline:**
-```
-POST /transactions → Kafka [transactions] → scoring-engine → Kafka [scored] → alert-service → Kafka [alerts] → notification-service
-```
-
-## Services
+The repository currently contains three services:
 
 | Service | Responsibility |
-|---------|---------------|
-| `transaction-gateway` | HTTP intake, enriches transaction with user data, publishes to Kafka |
-| `scoring-engine` | Worker pool, rule-based scoring, emits scored transactions |
-| `alert-service` | Consumes scored transactions, persists fraud events |
-| `notification-service` | Consumes alerts, rate-limited notifications |
-| `analytics-api` | HTTP API over fraud data |
-| `insight-service` | Periodic LLM analysis of fraud patterns |
+| --- | --- |
+| `transaction-gateway` | Validates HTTP requests, enriches transactions with an existing user profile and publishes them to Kafka |
+| `scoring-engine` | Caches fraud rules, scores transactions in a partition-ordered worker pool and publishes the result |
+| `alert-service` | Idempotently persists scoring results and alerts, then publishes alerts through a transactional outbox |
 
-## Tech Stack
+## Delivery guarantees
 
-- **Go** — all services
-- **Apache Kafka** — inter-service messaging
-- **PostgreSQL** — persistence
-- **Chi** — HTTP router
-- **pgxpool** — PostgreSQL connection pooling
-- **oapi-codegen** — OpenAPI-first, generated Chi handlers
-- **koanf** — configuration (TOML + ENV)
-- **Ollama / OpenAI** — LLM analytics
+- Kafka producers wait for acknowledgements from all in-sync replicas.
+- The scoring worker preserves processing and offset commit order within each
+  Kafka partition.
+- `alert-service` commits the consumed Kafka message only after its PostgreSQL
+  transaction succeeds.
+- `scored_transactions.transaction_id` makes redelivery idempotent.
+- Alert persistence and outbox enqueue happen in the same database transaction.
+- Outbox publication is at-least-once. Consumers of the `alerts` topic should
+  deduplicate by the Kafka message key (the alert ID).
 
-## Fraud Rules
+## Run locally
 
-Rules are stored in PostgreSQL and cached in-memory with periodic reload:
-
-```sql
-CREATE TABLE fraud_rules (
-    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    name        text NOT NULL,
-    field       text NOT NULL,       -- amount, country
-    operator    text NOT NULL,       -- gt, lt, eq, not_in
-    threshold   float8,
-    score_delta float8 NOT NULL,
-    active      bool DEFAULT true
-);
-```
-
-Transactions scoring above **80 points** trigger an alert.
-
-Example rules:
-- `amount gt 50000` → +40 pts
-- `country eq "KP"` → +60 pts
-- `impossible_travel` → +80 pts (country change within impossible timeframe)
-
-## Getting Started
-
-**Prerequisites:** Go 1.25+, Podman
+Requirements: Go 1.26+, Podman and `podman-compose`.
 
 ```bash
-# Create network
-podman network create SentinelNetwork
-
-# Start infrastructure
-podman-compose up -d
-
-# Run transaction-gateway
-cd services/transaction-gateway
-go run cmd/main.go
+cp .env.example .env
+make up
+make seed
 ```
 
-**Submit a transaction:**
+`make up` builds all three services and starts Kafka, PostgreSQL and Zookeeper.
+The development seed creates the user referenced by the example request.
+
+Submit a transaction:
+
 ```bash
-curl -X POST http://localhost:8080/transactions \
-  -H "Content-Type: application/json" \
+curl -i http://localhost:8080/transactions \
+  -H 'Content-Type: application/json' \
   -d '{
     "user_id": "550e8400-e29b-41d4-a716-446655440000",
     "amount": 99999.99,
-    "currency": "USD",
+    "currency": "EUR",
     "ip": "1.2.3.4",
     "country": "KP"
   }'
 ```
 
-## Project Structure
+The endpoint returns `202 Accepted`. The default rules produce a high-risk score
+and `alert-service` persists an alert before publishing it to the `alerts` topic.
 
-```
-sentinel/
-├── pkg/
-│   ├── models/       — shared domain models
-│   ├── kafka/        — Kafka reader/writer wrappers
-│   └── configs/      — shared base config
-├── services/
-│   ├── transaction-gateway/
-│   ├── scoring-engine/
-│   ├── alert-service/
-│   ├── notification-service/
-│   ├── analytics-api/
-│   └── insight-service/
-├── podman-compose.yml
-└── Makefile
-```
-
----
-
-# Sentinel (RU)
-
-Система обнаружения мошеннических транзакций в реальном времени на Go. Event-driven архитектура с Apache Kafka в качестве шины событий, PostgreSQL для хранения данных и LLM-аналитикой для выявления паттернов.
-
-## Архитектура
-
-```
-┌─────────────────┐     ┌──────────────────┐     ┌───────────────┐
-│ transaction-    │────▶│  scoring-engine  │────▶│ alert-service │
-│ gateway         │     │  (worker pool)   │     │               │
-└─────────────────┘     └──────────────────┘     └───────┬───────┘
-        │                        │                        │
-        │ обогащает данными юзера │ скоринг по правилам   │ сохраняет
-        ▼                        ▼                        ▼
-   PostgreSQL              fraud_rules DB           fraud_events DB
-                           (RuleCache)                     │
-                                                           ▼
-                                                  ┌─────────────────┐
-                                                  │ notification-   │
-                                                  │ service         │
-                                                  └─────────────────┘
-
-┌─────────────────┐     ┌──────────────────┐
-│  analytics-api  │     │ insight-service  │
-│  (HTTP API)     │     │ (LLM планировщик)│
-└─────────────────┘     └──────────────────┘
-```
-
-**Pipeline:**
-```
-POST /transactions → Kafka [transactions] → scoring-engine → Kafka [scored] → alert-service → Kafka [alerts] → notification-service
-```
-
-## Сервисы
-
-| Сервис | Ответственность |
-|--------|----------------|
-| `transaction-gateway` | Приём HTTP запросов, обогащение транзакции данными юзера, публикация в Kafka |
-| `scoring-engine` | Worker pool, скоринг по правилам, публикация результатов |
-| `alert-service` | Потребление scored транзакций, сохранение fraud событий |
-| `notification-service` | Потребление алертов, отправка уведомлений с rate limiting |
-| `analytics-api` | HTTP API для аналитики по fraud данным |
-| `insight-service` | Периодический LLM-анализ паттернов мошенничества |
-
-## Стек
-
-- **Go** — все сервисы
-- **Apache Kafka** — коммуникация между сервисами
-- **PostgreSQL** — хранение данных
-- **Chi** — HTTP роутер
-- **pgxpool** — пул соединений с PostgreSQL
-- **oapi-codegen** — OpenAPI-first, генерация Chi хендлеров
-- **koanf** — конфигурация (TOML + ENV)
-- **Ollama / OpenAI** — LLM аналитика
-
-## Правила скоринга
-
-Правила хранятся в PostgreSQL и кешируются в памяти с периодическим обновлением:
-
-```sql
-CREATE TABLE fraud_rules (
-    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    name        text NOT NULL,
-    field       text NOT NULL,       -- amount, country
-    operator    text NOT NULL,       -- gt, lt, eq, not_in
-    threshold   float8,
-    score_delta float8 NOT NULL,
-    active      bool DEFAULT true
-);
-```
-
-Транзакции набравшие более **80 баллов** получают статус фрода.
-
-Примеры правил:
-- `amount gt 50000` → +40 баллов
-- `country eq "KP"` → +60 баллов
-- `impossible_travel` → +80 баллов (смена страны за физически невозможное время)
-
-## Запуск
-
-**Требования:** Go 1.25+, Podman
+Stop the stack with:
 
 ```bash
-# Создать сеть
-podman network create SentinelNetwork
-
-# Поднять инфраструктуру
-podman-compose up -d
-
-# Запустить transaction-gateway
-cd services/transaction-gateway
-go run cmd/main.go
+make down
 ```
 
-**Отправить транзакцию:**
+To run only the infrastructure and start Go services from separate terminals:
+
 ```bash
-curl -X POST http://localhost:8080/transactions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "user_id": "550e8400-e29b-41d4-a716-446655440000",
-    "amount": 99999.99,
-    "currency": "USD",
-    "ip": "1.2.3.4",
-    "country": "KP"
-  }'
+make infra-up
+make run-gateway
+make run-scoring
+make run-alert
 ```
 
-## Структура проекта
+Each service owns its Goose version table, so their migrations can run in any
+startup order while sharing the development database.
 
+## Development
+
+```bash
+make test
+make test-race
+make vet
+make acceptance
 ```
-sentinel/
-├── pkg/
-│   ├── models/       — общие доменные модели
-│   ├── kafka/        — обёртки над Kafka reader/writer
-│   └── configs/      — базовый конфиг
-├── services/
-│   ├── transaction-gateway/
-│   ├── scoring-engine/
-│   ├── alert-service/
-│   ├── notification-service/
-│   ├── analytics-api/
-│   └── insight-service/
-├── podman-compose.yml
-└── Makefile
+
+The focused tests cover fraud rule evaluation, impossible-travel edge cases,
+Kafka partition ordering, publish/commit failure semantics, request validation
+and alert severity boundaries.
+
+`make acceptance` expects the Compose stack to be running. It seeds the demo
+user, submits a transaction and waits until the score, alert and published
+outbox record are visible in PostgreSQL.
+
+## Project layout
+
+```text
+pkg/
+  configs/      shared configuration types
+  database/     PostgreSQL pool and Goose helpers
+  kafka/        Kafka reader/writer constructors
+  models/       shared event and persistence models
+  outbox/       PostgreSQL transactional outbox publisher
+  storage/      generic PostgreSQL helpers
+services/
+  transaction-gateway/
+  scoring-engine/
+  alert-service/
+scripts/
+  seed-dev.sql
+podman-compose.yml
+Makefile
 ```

@@ -42,7 +42,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	writer := kafka.NewWriter(cfg.Kafka.Brokers, "scored")
+	writer := kafka.NewWriter(cfg.Kafka.Brokers)
 	reader := kafka.NewReader(cfg.Kafka.Brokers, "transactions", "scoring-engine")
 	defer func() {
 		if err := writer.Close(); err != nil {
@@ -55,7 +55,7 @@ func main() {
 		}
 	}()
 
-	if err := database.RunMigrations(ctx, cfg.DatabaseURL(), "./migrations"); err != nil {
+	if err := database.RunMigrations(ctx, cfg.DatabaseURL(), "./migrations", "goose_scoring_engine_version"); err != nil {
 		slog.ErrorContext(ctx, "error to apply migrations", slog.String("Error", err.Error()))
 		os.Exit(1)
 	}
@@ -75,11 +75,14 @@ func main() {
 
 	sigchan := make(chan os.Signal, 1)
 	signal.Notify(sigchan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(sigchan)
 
 	workerPool := worker.New(reader, writer, cache, cfg.Workers)
 
+	workerDone := make(chan struct{})
 	go func() {
 		workerPool.Run(ctx)
+		close(workerDone)
 	}()
 	select {
 	case sig := <-sigchan:
@@ -87,4 +90,5 @@ func main() {
 	case <-ctx.Done():
 	}
 	cancel()
+	<-workerDone
 }

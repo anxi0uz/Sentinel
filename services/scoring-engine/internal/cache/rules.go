@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -18,17 +19,17 @@ type RuleCache struct {
 func (c *RuleCache) Get() []models.FraudRule {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.rules
+	return append([]models.FraudRule(nil), c.rules...)
 }
 
 func (c *RuleCache) reload(ctx context.Context, db *pgxpool.Pool) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	rules, err := storage.GetAll[models.FraudRule](ctx, "fraud_rules", db)
 	if err != nil {
 		return err
 	}
+	c.mu.Lock()
 	c.rules = rules
+	c.mu.Unlock()
 	return nil
 }
 
@@ -44,7 +45,9 @@ func (c *RuleCache) Start(ctx context.Context, db *pgxpool.Pool, interval time.D
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				c.reload(ctx, db)
+				if err := c.reload(ctx, db); err != nil {
+					slog.ErrorContext(ctx, "failed to reload fraud rules", slog.String("error", err.Error()))
+				}
 			}
 		}
 	}()

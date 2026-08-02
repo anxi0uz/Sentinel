@@ -3,27 +3,29 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/anxi0uz/sentinel/pkg/models"
-	"github.com/anxi0uz/sentinel/pkg/storage"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/segmentio/kafka-go"
 )
 
-type AlertService struct {
-	reader *kafka.Reader
-	writer *kafka.Writer
-	db     *pgxpool.Pool
+type MessageReader interface {
+	FetchMessage(context.Context) (kafka.Message, error)
+	CommitMessages(context.Context, ...kafka.Message) error
 }
 
-func NewAlertService(reader *kafka.Reader, writer *kafka.Writer, db *pgxpool.Pool) *AlertService {
+type AlertService struct {
+	reader     MessageReader
+	repository ScoredRepository
+}
+
+func NewAlertService(reader MessageReader, repository ScoredRepository) *AlertService {
 	return &AlertService{
-		reader: reader,
-		writer: writer,
-		db:     db,
+		reader:     reader,
+		repository: repository,
 	}
 }
 
@@ -35,69 +37,76 @@ func (s *AlertService) Run(ctx context.Context) {
 				return
 			}
 			slog.ErrorContext(ctx, "error while fetching message", slog.String("error", err.Error()))
+			timer := time.NewTimer(time.Second)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
 			continue
 		}
 
 		var sc models.ScoredTransactionEvent
 		if err := json.Unmarshal(msg.Value, &sc); err != nil {
 			slog.ErrorContext(ctx, "error while unmarshal message", slog.String("error", err.Error()))
-			if err := s.reader.CommitMessages(ctx, msg); err != nil {
-				slog.ErrorContext(ctx, "error while commiting wrong message", slog.String("error", err.Error()))
-			}
+			s.retry(ctx, "commit invalid scored message", func() error {
+				return s.reader.CommitMessages(ctx, msg)
+			})
+			continue
+		}
+		if err := validateScoredEvent(sc); err != nil {
+			slog.ErrorContext(ctx, "invalid scored message", slog.String("error", err.Error()))
+			s.retry(ctx, "commit invalid scored message", func() error {
+				return s.reader.CommitMessages(ctx, msg)
+			})
 			continue
 		}
 
-		scoredtx := models.ScoredTransaction{
-			ID:             uuid.New(),
-			TransactionID:  sc.Transaction.ID,
-			Score:          sc.Score,
-			TriggeredRules: sc.TriggeredRules,
-			ProcessedAt:    sc.ProcessedAt,
+		var created bool
+		if !s.retry(ctx, "persist scored transaction", func() error {
+			var err error
+			created, err = s.repository.Save(ctx, sc)
+			return err
+		}) {
+			return
+		}
+		if !created {
+			slog.InfoContext(ctx, "scored transaction already processed",
+				slog.String("transaction_id", sc.Transaction.ID.String()))
+		}
+		if !s.retry(ctx, "commit scored message", func() error {
+			return s.reader.CommitMessages(ctx, msg)
+		}) {
+			return
+		}
+	}
+}
+
+func validateScoredEvent(event models.ScoredTransactionEvent) error {
+	if event.Transaction.ID == uuid.Nil {
+		return fmt.Errorf("transaction id is required")
+	}
+	if event.ProcessedAt.IsZero() {
+		return fmt.Errorf("processed_at is required")
+	}
+	return nil
+}
+
+func (s *AlertService) retry(ctx context.Context, operation string, fn func() error) bool {
+	for {
+		if err := fn(); err == nil {
+			return true
+		} else if ctx.Err() == nil {
+			slog.ErrorContext(ctx, operation+" failed; retrying", slog.String("error", err.Error()))
 		}
 
-		if err := storage.Create(ctx, "scored_transactions", scoredtx, s.db); err != nil {
-			slog.ErrorContext(ctx, "error while persistance scored transaction", slog.String("error", err.Error()))
-			continue
-		}
-
-		if scoredtx.Score >= 80 {
-			var severity string
-			if scoredtx.Score >= 80 && scoredtx.Score <= 89 {
-				severity = "MEDIUM"
-			}
-			if scoredtx.Score >= 90 && scoredtx.Score <= 119 {
-				severity = "HIGH"
-			}
-			if scoredtx.Score >= 120 {
-				severity = "CRITICAL"
-			}
-
-			alert := models.Alert{
-				ID:                  uuid.New(),
-				ScoredTransactionID: scoredtx.ID,
-				Severity:            models.Severity(severity),
-				CreatedAt:           time.Now(),
-			}
-			if err := storage.Create(ctx, "alerts", alert, s.db); err != nil {
-				slog.ErrorContext(ctx, "error while persistance alert", slog.String("error", err.Error()))
-				continue
-			}
-
-			payload, err := json.Marshal(alert)
-			if err != nil {
-				slog.ErrorContext(ctx, "error while marshal alert", slog.String("error", err.Error()))
-				continue
-			}
-			if err := s.writer.WriteMessages(ctx, kafka.Message{
-				Key:   []byte(alert.ID.String()),
-				Value: payload,
-			}); err != nil {
-				slog.ErrorContext(ctx, "error while writing message to kafka")
-				continue
-			}
-		}
-		if err := s.reader.CommitMessages(ctx, msg); err != nil {
-			slog.ErrorContext(ctx, "error while commiting wrong message", slog.String("error", err.Error()))
+		timer := time.NewTimer(time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return false
+		case <-timer.C:
 		}
 	}
 }

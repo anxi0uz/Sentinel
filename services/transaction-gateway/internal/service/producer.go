@@ -25,6 +25,7 @@ func (p *Producer) Publish(ctx context.Context, tx models.EnrichedTransaction) e
 	}
 
 	if err := p.writer.WriteMessages(ctx, kafka.Message{
+		Topic: "transactions",
 		Key:   []byte(tx.Transaction.ID.String()),
 		Value: payload,
 	}); err != nil {

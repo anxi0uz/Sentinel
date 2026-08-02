@@ -5,10 +5,12 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"github.com/anxi0uz/sentinel/pkg/database"
 	"github.com/anxi0uz/sentinel/pkg/kafka"
+	"github.com/anxi0uz/sentinel/pkg/outbox"
 	"github.com/anxi0uz/sentinel/services/alert-service/internal/config"
 	"github.com/anxi0uz/sentinel/services/alert-service/internal/service"
 	"github.com/golang-cz/devslog"
@@ -34,13 +36,15 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	NewDevLogger()
+
 	cfg, err := config.NewConfig(ctx, "configs/config.toml")
 	if err != nil {
 		slog.ErrorContext(ctx, "error to create config", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 
-	writer := kafka.NewWriter(cfg.Kafka.Brokers, "alerts")
+	writer := kafka.NewWriter(cfg.Kafka.Brokers)
 	reader := kafka.NewReader(cfg.Kafka.Brokers, "scored", "alert-service")
 
 	defer func() {
@@ -54,7 +58,7 @@ func main() {
 		}
 	}()
 
-	if err := database.RunMigrations(ctx, cfg.DatabaseURL(), "./migrations"); err != nil {
+	if err := database.RunMigrations(ctx, cfg.DatabaseURL(), "./migrations", "goose_alert_service_version"); err != nil {
 		slog.ErrorContext(ctx, "error to apply migrations", slog.String("Error", err.Error()))
 		os.Exit(1)
 	}
@@ -68,11 +72,21 @@ func main() {
 
 	sigchan := make(chan os.Signal, 1)
 	signal.Notify(sigchan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(sigchan)
 
-	alert := service.NewAlertService(reader, writer, pool)
+	repository := service.NewPostgresRepository(pool)
+	alert := service.NewAlertService(reader, repository)
+	publisher := outbox.NewPublisher(pool, writer, cfg.OutboxPollInterval)
 
+	var wg sync.WaitGroup
+	wg.Add(2)
 	go func() {
+		defer wg.Done()
 		alert.Run(ctx)
+	}()
+	go func() {
+		defer wg.Done()
+		publisher.Run(ctx)
 	}()
 
 	select {
@@ -81,4 +95,5 @@ func main() {
 	case <-ctx.Done():
 	}
 	cancel()
+	wg.Wait()
 }

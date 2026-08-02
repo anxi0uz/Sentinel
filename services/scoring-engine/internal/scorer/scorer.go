@@ -25,43 +25,52 @@ func Score(rules []models.FraudRule, tx models.EnrichedTransaction) (int, []stri
 func applies(rule models.FraudRule, tx models.EnrichedTransaction) bool {
 	switch rule.Operator {
 	case "gt":
-		return numericField(rule.Field, tx) > rule.Threshold
+		value, ok := numericField(rule.Field, tx)
+		return ok && value > rule.Threshold
 	case "lt":
-		return numericField(rule.Field, tx) < rule.Threshold
+		value, ok := numericField(rule.Field, tx)
+		return ok && value < rule.Threshold
 	case "eq":
 		if len(rule.Values) == 0 {
 			return false
 		}
-		return stringField(rule.Field, tx) == rule.Values[0]
+		value, ok := stringField(rule.Field, tx)
+		return ok && value == rule.Values[0]
 	case "not_in":
-		v := stringField(rule.Field, tx)
-		return !slices.Contains(rule.Values, v)
+		value, ok := stringField(rule.Field, tx)
+		return ok && !slices.Contains(rule.Values, value)
 	case "impossible_travel":
 		return impossibleTravel(tx, rule.Threshold)
 	}
 	return false
 }
 
-func numericField(field string, tx models.EnrichedTransaction) float64 {
+func numericField(field string, tx models.EnrichedTransaction) (float64, bool) {
 	switch field {
 	case "amount":
-		return tx.Transaction.Amount
+		return tx.Transaction.Amount, true
 	}
-	return 0
+	return 0, false
 }
 
-func stringField(field string, tx models.EnrichedTransaction) string {
+func stringField(field string, tx models.EnrichedTransaction) (string, bool) {
 	switch field {
 	case "country":
-		return tx.Transaction.Country
+		return tx.Transaction.Country, true
 	case "ip":
-		return tx.Transaction.IP
+		return tx.Transaction.IP, true
 	}
-	return ""
+	return "", false
 }
 
 func impossibleTravel(tx models.EnrichedTransaction, minHours float64) bool {
-	if tx.Transaction.Country == tx.User.LastCountry {
+	if minHours <= 0 || tx.User.LastSeenAt.IsZero() || tx.Transaction.Timestamp.IsZero() {
+		return false
+	}
+	if tx.Transaction.Country == "" || tx.User.LastCountry == "" || tx.Transaction.Country == tx.User.LastCountry {
+		return false
+	}
+	if !tx.Transaction.Timestamp.After(tx.User.LastSeenAt) {
 		return false
 	}
 	elapsed := tx.Transaction.Timestamp.Sub(tx.User.LastSeenAt).Hours()

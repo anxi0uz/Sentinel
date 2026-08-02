@@ -15,8 +15,8 @@ type ScoredTransaction struct {
 }
 
 type ScoredTransactionEvent struct {
-	Transaction    Transaction
-	Score          int
-	TriggeredRules []string
-	ProcessedAt    time.Time
+	Transaction    Transaction `json:"Transaction"`
+	Score          int         `json:"Score"`
+	TriggeredRules []string    `json:"TriggeredRules"`
+	ProcessedAt    time.Time   `json:"ProcessedAt"`
 }

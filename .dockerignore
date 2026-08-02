@@ -1,0 +1,10 @@
+.git
+.gitignore
+.hermes
+.env
+.env.*
+!.env.example
+*.log
+coverage
+bin
+dist

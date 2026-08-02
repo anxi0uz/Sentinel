@@ -52,7 +52,7 @@ func main() {
 
 	slog.SetLogLoggerLevel(cfg.LogLevel)
 
-	writer := kafka.NewWriter(cfg.Kafka.Brokers, "transactions")
+	writer := kafka.NewWriter(cfg.Kafka.Brokers)
 	defer func() {
 		if err := writer.Close(); err != nil {
 			slog.ErrorContext(ctx, "error while closing kafka writer", slog.String("error", err.Error()))
@@ -62,6 +62,12 @@ func main() {
 	pool, err := database.NewConnectionPool(ctx, cfg.DatabaseURL())
 	if err != nil {
 		slog.ErrorContext(ctx, "error while creating postgres pool", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	defer pool.Close()
+
+	if err := database.RunMigrations(ctx, cfg.DatabaseURL(), "./migrations", "goose_transaction_gateway_version"); err != nil {
+		slog.ErrorContext(ctx, "error while applying migrations", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 
@@ -78,6 +84,7 @@ func main() {
 			slogchi.IgnorePath("/health"),
 		},
 	}))
+	r.Get("/health", healthHandler)
 
 	h := api.HandlerFromMux(server, r)
 	srv := &http.Server{
@@ -90,6 +97,7 @@ func main() {
 
 	sigchan := make(chan os.Signal, 1)
 	signal.Notify(sigchan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(sigchan)
 
 	serverErr := make(chan error, 1)
 	go func() {
@@ -113,4 +121,10 @@ func main() {
 	}
 
 	slog.Info("transaction-gateway stopped")
+}
+
+func healthHandler(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }

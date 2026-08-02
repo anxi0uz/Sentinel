@@ -1,6 +1,6 @@
 package models
 
 type EnrichedTransaction struct {
-	Transaction Transaction
-	User        User
+	Transaction Transaction `json:"Transaction"`
+	User        User        `json:"User"`
 }

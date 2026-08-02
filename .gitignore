@@ -1,0 +1,7 @@
+.env
+services/*/.env
+.idea/
+.vscode/
+.hermes/
+coverage.out
+bin/

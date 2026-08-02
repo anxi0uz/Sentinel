@@ -5,20 +5,18 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/anxi0uz/sentinel/pkg/configs"
 	"github.com/joho/godotenv"
 	"github.com/knadh/koanf/parsers/toml"
-	"github.com/knadh/koanf/providers/env"
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/v2"
 )
 
 type Config struct {
-	configs.BaseConfig
-	Server ServerConfig `koanf:"server"`
+	configs.BaseConfig `koanf:",squash"`
+	Server             ServerConfig `koanf:"server"`
 }
 
 type ServerConfig struct {
@@ -46,9 +44,7 @@ func NewConfig(ctx context.Context, configPath string) (*Config, error) {
 		slog.InfoContext(ctx, "config.toml не найден — используем только ENV")
 	}
 
-	if err := k.Load(env.Provider("SENTINEL_", ".", func(s string) string {
-		return strings.ReplaceAll(strings.ToLower(strings.TrimPrefix(s, "SENTINEL_")), "_", ".")
-	}), nil); err != nil {
+	if err := k.Load(configs.EnvProvider(), nil); err != nil {
 		return nil, fmt.Errorf("ошибка загрузки ENV: %w", err)
 	}
 
@@ -120,16 +116,12 @@ func (c *Config) validate() error {
 	if len(c.Kafka.Brokers) == 0 {
 		return fmt.Errorf("kafka.brokers обязателен")
 	}
+	if c.Database.Host == "" {
+		return fmt.Errorf("database.host обязателен")
+	}
 	return nil
 }
 
 func (c *Config) DatabaseURL() string {
-	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
-		c.Database.User,
-		c.Database.Password,
-		c.Database.Host,
-		c.Database.Port,
-		c.Database.Name,
-		c.Database.SSLMode,
-	)
+	return c.Database.URL()
 }

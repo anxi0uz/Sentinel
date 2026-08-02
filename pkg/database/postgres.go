@@ -19,13 +19,14 @@ func NewConnectionPool(ctx context.Context, connectionString string) (*pgxpool.P
 	}
 
 	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
 		slog.ErrorContext(ctx, "Cant ping connection", slog.String("Error", err.Error()))
 		return nil, err
 	}
 
 	return pool, nil
 }
-func RunMigrations(ctx context.Context, dbURL string, migrationsDir string) error {
+func RunMigrations(ctx context.Context, dbURL, migrationsDir, tableName string) error {
 	db, err := sql.Open("pgx", dbURL)
 	if err != nil {
 		return fmt.Errorf("open db for migrations: %w", err)
@@ -35,6 +36,7 @@ func RunMigrations(ctx context.Context, dbURL string, migrationsDir string) erro
 	if err := goose.SetDialect("postgres"); err != nil {
 		return fmt.Errorf("goose dialect: %w", err)
 	}
+	goose.SetTableName(tableName)
 
 	if err := goose.Up(db, migrationsDir); err != nil {
 		return fmt.Errorf("goose up: %w", err)
