@@ -105,6 +105,51 @@ func TestPoolPreservesOrderWithinPartition(t *testing.T) {
 	<-done
 }
 
+func TestPoolCarriesUserSnapshotIntoScoredEvent(t *testing.T) {
+	transactionID := uuid.New()
+	userID := uuid.New()
+	input := models.EnrichedTransaction{
+		Transaction: models.Transaction{ID: transactionID, UserID: userID},
+		User: models.User{
+			ID:          userID,
+			Country:     "FI",
+			LastCountry: "SE",
+		},
+	}
+	payload, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reader := &sliceReader{
+		messages: []kafka.Message{{Partition: 0, Offset: 1, Value: payload}},
+		commits:  make(chan kafka.Message, 1),
+	}
+	writer := &recordingWriter{messages: make(chan kafka.Message, 1)}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		New(reader, writer, staticRules{}, 1).Run(ctx)
+		close(done)
+	}()
+
+	var scored models.ScoredTransactionEvent
+	select {
+	case message := <-writer.messages:
+		if err := json.Unmarshal(message.Value, &scored); err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for scored event")
+	}
+	cancel()
+	<-done
+
+	if scored.User.ID != input.User.ID || scored.User.Country != input.User.Country || scored.User.LastCountry != input.User.LastCountry {
+		t.Fatalf("user snapshot = %+v, want %+v", scored.User, input.User)
+	}
+}
+
 func TestPoolDoesNotCommitFailedPublish(t *testing.T) {
 	id := uuid.New()
 	payload, err := json.Marshal(models.EnrichedTransaction{Transaction: models.Transaction{ID: id}})

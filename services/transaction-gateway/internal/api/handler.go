@@ -82,7 +82,56 @@ func (s *Server) SubmitTransaction(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "Internal server error"})
 		return
 	}
-	writeJSON(w, 202, TransactionResponse{Id: &tx.ID})
+	writeJSON(w, http.StatusAccepted, TransactionResponse{Id: tx.ID})
+}
+
+func transactionEvent(scored models.ScoredTransaction, alert *models.Alert, published bool) (TransactionEvent, error) {
+	event := TransactionEvent{
+		TransactionId:  scored.TransactionID,
+		Score:          scored.Score,
+		TriggeredRules: scored.TriggeredRules,
+		ProcessedAt:    scored.ProcessedAt,
+		DeliveryStatus: NOTREQUIRED,
+	}
+	if event.TriggeredRules == nil {
+		event.TriggeredRules = []string{}
+	}
+
+	if len(scored.TransactionPayload) > 0 && string(scored.TransactionPayload) != "null" {
+		var snapshot models.EnrichedTransaction
+		if err := json.Unmarshal(scored.TransactionPayload, &snapshot); err != nil {
+			return TransactionEvent{}, fmt.Errorf("decode transaction snapshot: %w", err)
+		}
+		event.Transaction = &TransactionSnapshot{
+			Id:        snapshot.Transaction.ID,
+			UserId:    snapshot.Transaction.UserID,
+			Amount:    snapshot.Transaction.Amount,
+			Currency:  snapshot.Transaction.Currency,
+			Ip:        snapshot.Transaction.IP,
+			Country:   snapshot.Transaction.Country,
+			Timestamp: snapshot.Transaction.Timestamp,
+		}
+		event.User = &UserSnapshot{
+			Id:          snapshot.User.ID,
+			Country:     snapshot.User.Country,
+			LastIp:      snapshot.User.LastIP,
+			LastCountry: snapshot.User.LastCountry,
+			LastSeenAt:  snapshot.User.LastSeenAt,
+			CreatedAt:   snapshot.User.CreatedAt,
+		}
+	}
+
+	if alert != nil {
+		severity := Severity(alert.Severity)
+		event.AlertId = &alert.ID
+		event.Severity = &severity
+		event.DeliveryStatus = PENDING
+		if published {
+			event.DeliveryStatus = PUBLISHED
+		}
+	}
+
+	return event, nil
 }
 
 func validateTransactionRequest(req TransactionRequest) error {

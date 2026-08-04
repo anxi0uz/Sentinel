@@ -3,7 +3,10 @@ include .env
 export
 endif
 
-.PHONY: test test-race vet smoke acceptance infra-up infra-down up down seed run-gateway run-scoring run-alert
+.PHONY: generate test test-race vet smoke acceptance infra-up infra-down up down seed run-gateway run-scoring run-alert run-generator
+
+generate:
+	cd services/transaction-gateway && oapi-codegen --config configs/oapi-cfg.yaml internal/api/api.swagger.yaml
 
 test:
 	go test ./...
@@ -20,14 +23,15 @@ smoke:
 acceptance: smoke
 
 infra-up:
-	podman-compose up -d zookeeper kafka postgres
+	podman-compose up -d kafka postgres
 
 infra-down:
 	podman-compose down
 
 up:
 	podman-compose build
-	podman-compose up -d --force-recreate
+	podman-compose up -d kafka postgres
+	podman-compose up -d --no-deps --force-recreate transaction-gateway scoring-engine alert-service event-generator web
 
 down:
 	podman-compose down
@@ -43,3 +47,6 @@ run-scoring:
 
 run-alert:
 	cd services/alert-service && go run ./cmd
+
+run-generator:
+	go run ./services/event-generator/cmd

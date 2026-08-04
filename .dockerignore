@@ -8,3 +8,4 @@
 coverage
 bin
 dist
+node_modules

@@ -178,3 +178,41 @@ func TestSeverityForScore(t *testing.T) {
 		}
 	}
 }
+
+func TestMarshalTransactionSnapshotPreservesScoringInput(t *testing.T) {
+	transactionID := uuid.New()
+	userID := uuid.New()
+	event := models.ScoredTransactionEvent{
+		Transaction: models.Transaction{
+			ID:        transactionID,
+			UserID:    userID,
+			Amount:    1599.50,
+			Currency:  "EUR",
+			IP:        "203.0.113.15",
+			Country:   "FI",
+			Timestamp: time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC),
+		},
+		User: models.User{
+			ID:          userID,
+			Country:     "FI",
+			LastIP:      "198.51.100.7",
+			LastCountry: "SE",
+			LastSeenAt:  time.Date(2026, 8, 2, 11, 30, 0, 0, time.UTC),
+		},
+	}
+
+	payload, err := marshalTransactionSnapshot(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot models.EnrichedTransaction
+	if err := json.Unmarshal(payload, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Transaction != event.Transaction {
+		t.Fatalf("transaction snapshot = %+v, want %+v", snapshot.Transaction, event.Transaction)
+	}
+	if snapshot.User != event.User {
+		t.Fatalf("user snapshot = %+v, want %+v", snapshot.User, event.User)
+	}
+}

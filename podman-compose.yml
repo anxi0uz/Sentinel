@@ -8,40 +8,36 @@ x-app-environment: &app-environment
   SENTINEL_DATABASE_SSLMODE: disable
 
 services:
-  zookeeper:
-    image: docker.io/confluentinc/cp-zookeeper:7.7.1
-    container_name: sentinel-zookeeper
-    ports:
-      - "2181:2181"
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-    healthcheck:
-      test: ["CMD-SHELL", "echo ruok | nc localhost 2181"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
   kafka:
     image: docker.io/confluentinc/cp-kafka:7.7.1
     container_name: sentinel-kafka
-    depends_on:
-      zookeeper:
-        condition: service_healthy
+    restart: on-failure
     ports:
       - "9092:9092"
     environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      CLUSTER_ID: ${SENTINEL_KAFKA_CLUSTER_ID:-MkU3OEVBNTcwNTJENDM2Qk}
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_INTERNAL://0.0.0.0:29092,CONTROLLER://0.0.0.0:29093
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_INTERNAL
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    volumes:
+      - kafka_data:/var/lib/kafka/data
     healthcheck:
       test:
-        ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list"]
+        ["CMD-SHELL", "kafka-metadata-quorum --bootstrap-server 127.0.0.1:9092 describe --status >/dev/null 2>&1 && kafka-topics --bootstrap-server 127.0.0.1:9092 --list >/dev/null"]
       interval: 10s
       timeout: 10s
-      retries: 5
+      retries: 10
+      start_period: 20s
 
   postgres:
     image: docker.io/library/postgres:17-alpine
@@ -109,7 +105,39 @@ services:
         condition: service_healthy
     environment: *app-environment
 
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    container_name: sentinel-web
+    restart: on-failure
+    depends_on:
+      transaction-gateway:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3000:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health >/dev/null"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  event-generator:
+    build:
+      context: .
+      dockerfile: services/event-generator/Dockerfile
+    container_name: sentinel-event-generator
+    restart: on-failure
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      SENTINEL_KAFKA_BROKERS: kafka:29092
+      SENTINEL_GENERATOR_INTERVAL: ${SENTINEL_GENERATOR_INTERVAL:-2s}
+      SENTINEL_GENERATOR_SCENARIO: ${SENTINEL_GENERATOR_SCENARIO:-mixed}
+
 volumes:
+  kafka_data:
   postgres_data:
 
 networks:

@@ -5,3 +5,5 @@ services/*/.env
 .hermes/
 coverage.out
 bin/
+web/node_modules/
+web/dist/

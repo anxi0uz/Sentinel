@@ -1,7 +1,7 @@
 openapi: 3.0.0
 info:
-  title: Transaction Gateway
-  version: 1.0.0
+  title: Sentinel API
+  version: 1.1.0
 
 paths:
   /transactions:
@@ -22,28 +22,111 @@ paths:
               schema:
                 $ref: "#/components/schemas/TransactionResponse"
         "400":
-          description: Invalid request
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "500":
-          description: Internal server error
+          $ref: "#/components/responses/InternalError"
+    get:
+      summary: List processed transactions
+      operationId: listTransactions
+      parameters:
+        - name: severity
+          in: query
+          schema:
+            $ref: "#/components/schemas/Severity"
+        - name: min_score
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        "200":
+          description: Processed transactions
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ErrorResponse"
+                $ref: "#/components/schemas/TransactionListResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /transactions/{transaction_id}:
+    get:
+      summary: Get a processed transaction
+      operationId: getTransaction
+      parameters:
+        - name: transaction_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Processed transaction
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransactionEvent"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /stats:
+    get:
+      summary: Get dashboard statistics
+      operationId: getStats
+      responses:
+        "200":
+          description: Dashboard statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatsResponse"
+        "500":
+          $ref: "#/components/responses/InternalError"
 
 components:
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
   schemas:
     TransactionRequest:
       type: object
-      required:
-        - user_id
-        - amount
-        - currency
-        - ip
-        - country
+      required: [user_id, amount, currency, ip, country]
       properties:
         user_id:
           type: string
@@ -65,15 +148,159 @@ components:
 
     TransactionResponse:
       type: object
+      required: [id]
       properties:
         id:
           type: string
           format: uuid
 
-    ErrorResponse:
+    TransactionSnapshot:
+      type: object
+      required: [id, user_id, amount, currency, ip, country, timestamp]
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        amount:
+          type: number
+          format: double
+        currency:
+          type: string
+        ip:
+          type: string
+        country:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+
+    UserSnapshot:
+      type: object
+      required: [id, country, last_ip, last_country, last_seen_at, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        country:
+          type: string
+        last_ip:
+          type: string
+        last_country:
+          type: string
+        last_seen_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+
+    Severity:
+      type: string
+      enum: [MEDIUM, HIGH, CRITICAL]
+
+    DeliveryStatus:
+      type: string
+      enum: [NOT_REQUIRED, PENDING, PUBLISHED]
+
+    TransactionEvent:
       type: object
       required:
-        - error
+        - transaction_id
+        - score
+        - triggered_rules
+        - processed_at
+        - delivery_status
+      properties:
+        transaction_id:
+          type: string
+          format: uuid
+        transaction:
+          $ref: "#/components/schemas/TransactionSnapshot"
+        user:
+          $ref: "#/components/schemas/UserSnapshot"
+        score:
+          type: integer
+        triggered_rules:
+          type: array
+          items:
+            type: string
+        processed_at:
+          type: string
+          format: date-time
+        alert_id:
+          type: string
+          format: uuid
+        severity:
+          $ref: "#/components/schemas/Severity"
+        delivery_status:
+          $ref: "#/components/schemas/DeliveryStatus"
+
+    Pagination:
+      type: object
+      required: [limit, offset, total]
+      properties:
+        limit:
+          type: integer
+        offset:
+          type: integer
+        total:
+          type: integer
+
+    TransactionListResponse:
+      type: object
+      required: [items, pagination]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/TransactionEvent"
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+
+    SeverityCounts:
+      type: object
+      required: [medium, high, critical]
+      properties:
+        medium:
+          type: integer
+        high:
+          type: integer
+        critical:
+          type: integer
+
+    RuleCount:
+      type: object
+      required: [name, count]
+      properties:
+        name:
+          type: string
+        count:
+          type: integer
+
+    StatsResponse:
+      type: object
+      required: [processed, alerts, average_score, by_severity, top_rules]
+      properties:
+        processed:
+          type: integer
+        alerts:
+          type: integer
+        average_score:
+          type: number
+          format: double
+        by_severity:
+          $ref: "#/components/schemas/SeverityCounts"
+        top_rules:
+          type: array
+          items:
+            $ref: "#/components/schemas/RuleCount"
+
+    ErrorResponse:
+      type: object
+      required: [error]
       properties:
         error:
           type: string

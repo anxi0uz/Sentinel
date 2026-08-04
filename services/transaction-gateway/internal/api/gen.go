@@ -6,14 +6,112 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/oapi-codegen/runtime"
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
+
+// Defines values for DeliveryStatus.
+const (
+	NOTREQUIRED DeliveryStatus = "NOT_REQUIRED"
+	PENDING     DeliveryStatus = "PENDING"
+	PUBLISHED   DeliveryStatus = "PUBLISHED"
+)
+
+// Valid indicates whether the value is a known member of the DeliveryStatus enum.
+func (e DeliveryStatus) Valid() bool {
+	switch e {
+	case NOTREQUIRED:
+		return true
+	case PENDING:
+		return true
+	case PUBLISHED:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for Severity.
+const (
+	CRITICAL Severity = "CRITICAL"
+	HIGH     Severity = "HIGH"
+	MEDIUM   Severity = "MEDIUM"
+)
+
+// Valid indicates whether the value is a known member of the Severity enum.
+func (e Severity) Valid() bool {
+	switch e {
+	case CRITICAL:
+		return true
+	case HIGH:
+		return true
+	case MEDIUM:
+		return true
+	default:
+		return false
+	}
+}
+
+// DeliveryStatus defines model for DeliveryStatus.
+type DeliveryStatus string
 
 // ErrorResponse defines model for ErrorResponse.
 type ErrorResponse struct {
 	Error string `json:"error"`
+}
+
+// Pagination defines model for Pagination.
+type Pagination struct {
+	Limit  int `json:"limit"`
+	Offset int `json:"offset"`
+	Total  int `json:"total"`
+}
+
+// RuleCount defines model for RuleCount.
+type RuleCount struct {
+	Count int    `json:"count"`
+	Name  string `json:"name"`
+}
+
+// Severity defines model for Severity.
+type Severity string
+
+// SeverityCounts defines model for SeverityCounts.
+type SeverityCounts struct {
+	Critical int `json:"critical"`
+	High     int `json:"high"`
+	Medium   int `json:"medium"`
+}
+
+// StatsResponse defines model for StatsResponse.
+type StatsResponse struct {
+	Alerts       int            `json:"alerts"`
+	AverageScore float64        `json:"average_score"`
+	BySeverity   SeverityCounts `json:"by_severity"`
+	Processed    int            `json:"processed"`
+	TopRules     []RuleCount    `json:"top_rules"`
+}
+
+// TransactionEvent defines model for TransactionEvent.
+type TransactionEvent struct {
+	AlertId        *openapi_types.UUID  `json:"alert_id,omitempty"`
+	DeliveryStatus DeliveryStatus       `json:"delivery_status"`
+	ProcessedAt    time.Time            `json:"processed_at"`
+	Score          int                  `json:"score"`
+	Severity       *Severity            `json:"severity,omitempty"`
+	Transaction    *TransactionSnapshot `json:"transaction,omitempty"`
+	TransactionId  openapi_types.UUID   `json:"transaction_id"`
+	TriggeredRules []string             `json:"triggered_rules"`
+	User           *UserSnapshot        `json:"user,omitempty"`
+}
+
+// TransactionListResponse defines model for TransactionListResponse.
+type TransactionListResponse struct {
+	Items      []TransactionEvent `json:"items"`
+	Pagination Pagination         `json:"pagination"`
 }
 
 // TransactionRequest defines model for TransactionRequest.
@@ -27,7 +125,45 @@ type TransactionRequest struct {
 
 // TransactionResponse defines model for TransactionResponse.
 type TransactionResponse struct {
-	Id *openapi_types.UUID `json:"id,omitempty"`
+	Id openapi_types.UUID `json:"id"`
+}
+
+// TransactionSnapshot defines model for TransactionSnapshot.
+type TransactionSnapshot struct {
+	Amount    float64            `json:"amount"`
+	Country   string             `json:"country"`
+	Currency  string             `json:"currency"`
+	Id        openapi_types.UUID `json:"id"`
+	Ip        string             `json:"ip"`
+	Timestamp time.Time          `json:"timestamp"`
+	UserId    openapi_types.UUID `json:"user_id"`
+}
+
+// UserSnapshot defines model for UserSnapshot.
+type UserSnapshot struct {
+	Country     string             `json:"country"`
+	CreatedAt   time.Time          `json:"created_at"`
+	Id          openapi_types.UUID `json:"id"`
+	LastCountry string             `json:"last_country"`
+	LastIp      string             `json:"last_ip"`
+	LastSeenAt  time.Time          `json:"last_seen_at"`
+}
+
+// BadRequest defines model for BadRequest.
+type BadRequest = ErrorResponse
+
+// InternalError defines model for InternalError.
+type InternalError = ErrorResponse
+
+// NotFound defines model for NotFound.
+type NotFound = ErrorResponse
+
+// ListTransactionsParams defines parameters for ListTransactions.
+type ListTransactionsParams struct {
+	Severity *Severity `form:"severity,omitempty" json:"severity,omitempty"`
+	MinScore *int      `form:"min_score,omitempty" json:"min_score,omitempty"`
+	Limit    *int      `form:"limit,omitempty" json:"limit,omitempty"`
+	Offset   *int      `form:"offset,omitempty" json:"offset,omitempty"`
 }
 
 // SubmitTransactionJSONRequestBody defines body for SubmitTransaction for application/json ContentType.
@@ -35,18 +171,45 @@ type SubmitTransactionJSONRequestBody = TransactionRequest
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+	// Get dashboard statistics
+	// (GET /stats)
+	GetStats(w http.ResponseWriter, r *http.Request)
+	// List processed transactions
+	// (GET /transactions)
+	ListTransactions(w http.ResponseWriter, r *http.Request, params ListTransactionsParams)
 	// Submit a transaction
 	// (POST /transactions)
 	SubmitTransaction(w http.ResponseWriter, r *http.Request)
+	// Get a processed transaction
+	// (GET /transactions/{transaction_id})
+	GetTransaction(w http.ResponseWriter, r *http.Request, transactionId openapi_types.UUID)
 }
 
 // Unimplemented server implementation that returns http.StatusNotImplemented for each endpoint.
 
 type Unimplemented struct{}
 
+// Get dashboard statistics
+// (GET /stats)
+func (_ Unimplemented) GetStats(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// List processed transactions
+// (GET /transactions)
+func (_ Unimplemented) ListTransactions(w http.ResponseWriter, r *http.Request, params ListTransactionsParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 // Submit a transaction
 // (POST /transactions)
 func (_ Unimplemented) SubmitTransaction(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Get a processed transaction
+// (GET /transactions/{transaction_id})
+func (_ Unimplemented) GetTransaction(w http.ResponseWriter, r *http.Request, transactionId openapi_types.UUID) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -59,11 +222,101 @@ type ServerInterfaceWrapper struct {
 
 type MiddlewareFunc func(http.Handler) http.Handler
 
+// GetStats operation middleware
+func (siw *ServerInterfaceWrapper) GetStats(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetStats(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListTransactions operation middleware
+func (siw *ServerInterfaceWrapper) ListTransactions(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListTransactionsParams
+
+	// ------------- Optional query parameter "severity" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "severity", r.URL.Query(), &params.Severity, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "severity", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "min_score" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "min_score", r.URL.Query(), &params.MinScore, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "min_score", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "offset" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "offset", r.URL.Query(), &params.Offset, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "offset", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListTransactions(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // SubmitTransaction operation middleware
 func (siw *ServerInterfaceWrapper) SubmitTransaction(w http.ResponseWriter, r *http.Request) {
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.SubmitTransaction(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetTransaction operation middleware
+func (siw *ServerInterfaceWrapper) GetTransaction(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "transaction_id" -------------
+	var transactionId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "transaction_id", chi.URLParam(r, "transaction_id"), &transactionId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "transaction_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetTransaction(w, r, transactionId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -187,7 +440,16 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	}
 
 	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/stats", wrapper.GetStats)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/transactions", wrapper.ListTransactions)
+	})
+	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/transactions", wrapper.SubmitTransaction)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/transactions/{transaction_id}", wrapper.GetTransaction)
 	})
 
 	return r

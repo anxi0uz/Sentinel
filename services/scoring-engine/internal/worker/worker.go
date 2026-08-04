@@ -88,6 +88,7 @@ func (p *Pool) work(ctx context.Context, messages <-chan kafka.Message) {
 			score, triggered := scorer.Score(rules, tx)
 			sc := models.ScoredTransactionEvent{
 				Transaction:    tx.Transaction,
+				User:           tx.User,
 				Score:          score,
 				TriggeredRules: triggered,
 				ProcessedAt:    time.Now(),

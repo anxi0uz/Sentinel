@@ -32,6 +32,11 @@ func NewPostgresRepository(db *pgxpool.Pool) *PostgresRepository {
 // outbox event in one transaction. It returns false for an already processed
 // transaction.
 func (r *PostgresRepository) Save(ctx context.Context, event models.ScoredTransactionEvent) (bool, error) {
+	snapshot, err := marshalTransactionSnapshot(event)
+	if err != nil {
+		return false, err
+	}
+
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return false, fmt.Errorf("begin alert transaction: %w", err)
@@ -40,8 +45,8 @@ func (r *PostgresRepository) Save(ctx context.Context, event models.ScoredTransa
 
 	scoredID := uuid.New()
 	err = tx.QueryRow(ctx, `
-		INSERT INTO scored_transactions (id, transaction_id, score, triggered_rules, processed_at)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO scored_transactions (id, transaction_id, score, triggered_rules, processed_at, transaction_payload)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (transaction_id) DO NOTHING
 		RETURNING id`,
 		scoredID,
@@ -49,6 +54,7 @@ func (r *PostgresRepository) Save(ctx context.Context, event models.ScoredTransa
 		event.Score,
 		event.TriggeredRules,
 		event.ProcessedAt,
+		snapshot,
 	).Scan(&scoredID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		if err := tx.Commit(ctx); err != nil {
@@ -94,6 +100,17 @@ func (r *PostgresRepository) Save(ctx context.Context, event models.ScoredTransa
 		return false, fmt.Errorf("commit scored transaction: %w", err)
 	}
 	return true, nil
+}
+
+func marshalTransactionSnapshot(event models.ScoredTransactionEvent) ([]byte, error) {
+	payload, err := json.Marshal(models.EnrichedTransaction{
+		Transaction: event.Transaction,
+		User:        event.User,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal transaction snapshot: %w", err)
+	}
+	return payload, nil
 }
 
 func severityForScore(score int) (models.Severity, bool) {
